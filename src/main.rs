@@ -60,11 +60,13 @@ impl Snake {
     fn new() -> Self {
         let mut body = [(0, 0); 64];
         body[0] = (5, 5);
+        body[1] = (4, 5);
+        body[2] = (3, 5);
 
         Self {
             body,
             direction: Direction::Right,
-            length: 1,
+            length: 3,
         }
     }
 
@@ -105,11 +107,6 @@ impl Direction {
     }
 }
 
-const IMAGE_LEFT: [u8; 8] = [0b10000, 0, 0, 0, 0, 0, 0, 0];
-const IMAGE_RIGHT: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0b10000];
-const IMAGE_UP: [u8; 8] = [0, 0, 0, 0, 0b1, 0, 0, 0];
-const IMAGE_DOWN: [u8; 8] = [0, 0, 0, 0, 0b10000000, 0, 0, 0];
-
 #[arduino_hal::entry]
 fn main() -> ! {
     let dp = arduino_hal::Peripherals::take().unwrap();
@@ -138,7 +135,7 @@ fn main() -> ! {
         gamestate.tick();
 
         write_image(&mut max, gamestate.to_image());
-        arduino_hal::delay_ms(1000);
+        arduino_hal::delay_ms(500);
     }
 }
 
