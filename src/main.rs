@@ -17,6 +17,24 @@ impl GameState {
         GameState { snake: Snake::new() }
     }
 
+    fn process_movement(&mut self, direction: Option<Direction>) {
+        let Some(direction) = direction else {
+            return;
+        };
+
+        match (&self.snake.direction, &direction) {
+            | (Direction::Left, Direction::Right)
+            | (Direction::Right, Direction::Left)
+            | (Direction::Up, Direction::Down)
+            | (Direction::Down, Direction::Up) => (),
+            _ => self.snake.direction = direction
+        }
+    }
+
+    fn tick(&mut self) {
+        self.snake.tick();
+    }
+
     fn to_image(&self) -> [u8; 8] {
         let mut image: [u8; 8] = [0; 8];
 
@@ -34,19 +52,55 @@ impl GameState {
 
 struct Snake {
     body: [(u8, u8); 64],
+    direction: Direction,
     length: u8,
 }
 
 impl Snake {
     fn new() -> Self {
-            let mut body = [(0, 0); 64];
-            body[0] = (5, 5);
-            body[1] = (5, 6);
-            body[2] = (6, 6);
+        let mut body = [(0, 0); 64];
+        body[0] = (5, 5);
 
         Self {
             body,
-            length: 3,
+            direction: Direction::Right,
+            length: 1,
+        }
+    }
+
+    fn tick(&mut self) {
+        let mut previous = self.body[0].clone();
+
+        let movement = self.direction.to_index_movement();
+        self.body[0] = (previous.0.wrapping_add_signed(movement.0), previous.1.wrapping_add_signed(movement.1));
+
+        if self.length < 1 {
+            return;
+        }
+
+        for i in 1..self.length {
+            let new_prev = self.body[i as usize];
+            self.body[i as usize] = previous;
+            previous = new_prev;
+        }
+    }
+}
+
+#[derive(Clone)]
+enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl Direction {
+    fn to_index_movement(&self) -> (i8, i8) {
+        match self {
+            Self::Up => (0, -1),
+            Self::Down => (0, 1),
+            Self::Left => (-1, 0),
+            Self::Right => (1, 0)
         }
     }
 }
@@ -68,19 +122,23 @@ fn main() -> ! {
     let mut max = MAX7219::from_pins(1, pins.d11.into_output(), pins.d10.into_output(), pins.d13.into_output()).unwrap();
     max.power_on().unwrap();
 
-    let gamestate = GameState::new();
+    let mut gamestate = GameState::new();
 
     loop {
 
-        match (joy_x.analog_read(&mut adc), joy_y.analog_read(&mut adc)) {
-            (x, _) if x > 1000 => write_image(&mut max, IMAGE_RIGHT),
-            (x, _) if x < 100 => write_image(&mut max, IMAGE_LEFT),
-            (_, y) if y > 1000 => write_image(&mut max, IMAGE_DOWN),
-            (_, y) if y < 100 => write_image(&mut max, IMAGE_UP),
-            _ => write_image(&mut max, [0; 8]),
-        }
+        let new_direction = match (joy_x.analog_read(&mut adc), joy_y.analog_read(&mut adc)) {
+            (x, _) if x > 1000 => Some(Direction::Right),
+            (x, _) if x < 100 => Some(Direction::Left),
+            (_, y) if y > 1000 => Some(Direction::Down),
+            (_, y) if y < 100 => Some(Direction::Up),
+            _ => None, 
+        };
 
-        // write_image(&mut max, gamestate.to_image());
+        gamestate.process_movement(new_direction);
+        gamestate.tick();
+
+        write_image(&mut max, gamestate.to_image());
+        arduino_hal::delay_ms(1000);
     }
 }
 
