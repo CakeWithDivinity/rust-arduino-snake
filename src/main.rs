@@ -51,11 +51,19 @@ impl Snake {
     }
 }
 
+const IMAGE_LEFT: [u8; 8] = [0b10000, 0, 0, 0, 0, 0, 0, 0];
+const IMAGE_RIGHT: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0b10000];
+const IMAGE_UP: [u8; 8] = [0, 0, 0, 0, 0b1, 0, 0, 0];
+const IMAGE_DOWN: [u8; 8] = [0, 0, 0, 0, 0b10000000, 0, 0, 0];
+
 #[arduino_hal::entry]
 fn main() -> ! {
     let dp = arduino_hal::Peripherals::take().unwrap();
     let pins = arduino_hal::pins!(dp);
+    let mut adc = arduino_hal::Adc::new(dp.ADC, Default::default());
 
+    let joy_x = pins.a1.into_analog_input(&mut adc);
+    let joy_y = pins.a2.into_analog_input(&mut adc);
 
     let mut max = MAX7219::from_pins(1, pins.d11.into_output(), pins.d10.into_output(), pins.d13.into_output()).unwrap();
     max.power_on().unwrap();
@@ -63,7 +71,16 @@ fn main() -> ! {
     let gamestate = GameState::new();
 
     loop {
-        write_image(&mut max, gamestate.to_image());
+
+        match (joy_x.analog_read(&mut adc), joy_y.analog_read(&mut adc)) {
+            (x, _) if x > 1000 => write_image(&mut max, IMAGE_RIGHT),
+            (x, _) if x < 100 => write_image(&mut max, IMAGE_LEFT),
+            (_, y) if y > 1000 => write_image(&mut max, IMAGE_DOWN),
+            (_, y) if y < 100 => write_image(&mut max, IMAGE_UP),
+            _ => write_image(&mut max, [0; 8]),
+        }
+
+        // write_image(&mut max, gamestate.to_image());
     }
 }
 
