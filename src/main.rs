@@ -8,14 +8,22 @@ use panic_halt as _;
 
 type Matrix = MAX7219<PinConnector<Pin<Output, PB3>, Pin<Output, PB2>, Pin<Output, PB5>>>;
 
-struct GameState {
-    snake: Snake,
-    food: (u8, u8),
+#[derive(PartialEq)]
+enum GameState {
+    Start,
+    Dead,
+    Running,
 }
 
-impl GameState {
+struct GameManager {
+    snake: Snake,
+    food: (u8, u8),
+    state: GameState,
+}
+
+impl GameManager {
     fn new(initial_food_pos: (u8, u8)) -> Self {
-        GameState { snake: Snake::new(), food: initial_food_pos }
+        GameManager { snake: Snake::new(), food: initial_food_pos, state: GameState::Start }
     }
 
     fn process_movement(&mut self, direction: Option<Direction>) {
@@ -33,9 +41,16 @@ impl GameState {
     }
 
     fn tick(&mut self, analog_noise: &Pin<Analog, PC3>, adc: &mut Adc<MHz16>) {
+        let next_pos = self.snake.get_next_pos();
+        if self.snake.is_on_pos(next_pos) || is_position_out_of_bounds(next_pos) {
+            self.state = GameState::Dead;
+            return;
+        }
+
         let snake_tail = self.snake.tick();
 
         let snake_head = self.snake.body[0];
+
         if snake_head == self.food {
             self.snake.body[self.snake.length as usize] = snake_tail;
             self.snake.length += 1;
@@ -90,8 +105,8 @@ impl Snake {
     fn tick(&mut self) -> (u8, u8) {
         let mut previous = self.body[0].clone();
 
-        let movement = self.direction.to_index_movement();
-        self.body[0] = (previous.0.wrapping_add_signed(movement.0), previous.1.wrapping_add_signed(movement.1));
+        let next_pos = self.get_next_pos();
+        self.body[0] = next_pos;
 
         for i in 1..self.length {
             let new_prev = self.body[i as usize];
@@ -104,6 +119,12 @@ impl Snake {
 
     fn is_on_pos(&self, pos: (u8, u8)) -> bool {
         self.body.iter().any(|snake_part| *snake_part == pos)
+    }
+
+    fn get_next_pos(&self) -> (u8, u8) {
+        let movement = self.direction.to_index_movement();
+        let head = self.body[0];
+        (head.0.wrapping_add_signed(movement.0), head.1.wrapping_add_signed(movement.1))
     }
 }
 
@@ -134,6 +155,7 @@ fn main() -> ! {
 
     let joy_x = pins.a1.into_analog_input(&mut adc);
     let joy_y = pins.a2.into_analog_input(&mut adc);
+    let joy_button = pins.d2.into_pull_up_input();
 
     let analog_noise = pins.a3.into_analog_input(&mut adc);
 
@@ -141,9 +163,21 @@ fn main() -> ! {
     max.power_on().unwrap();
 
 
-    let mut gamestate = GameState::new(generate_rand_food_pos(&analog_noise, &mut adc));
+    let mut gamestate = GameManager::new(generate_rand_food_pos(&analog_noise, &mut adc));
+    write_image(&mut max, gamestate.to_image());
 
     loop {
+        if gamestate.state != GameState::Running {
+            if joy_button.is_low() {
+                if gamestate.state == GameState::Dead {
+                    gamestate = GameManager::new(generate_rand_food_pos(&analog_noise, &mut adc));
+                }
+
+                gamestate.state = GameState::Running;
+            }
+
+            continue;
+        }
 
         let new_direction = match (joy_x.analog_read(&mut adc), joy_y.analog_read(&mut adc)) {
             (x, _) if x > 900 => Some(Direction::Right),
@@ -169,4 +203,8 @@ fn write_image(max: &mut Matrix, image: [u8; 8]) {
 
 fn generate_rand_food_pos(analog_noise: &Pin<Analog, PC3>, adc: &mut Adc<MHz16>) -> (u8, u8) {
     ((analog_noise.analog_read(adc) % 8 + 1) as u8,(analog_noise.analog_read(adc) % 8 + 1) as u8)
+}
+
+fn is_position_out_of_bounds(pos: (u8, u8)) -> bool {
+    pos.0 <= 0 || pos.0 > 8 || pos.1 <= 0 || pos.1 > 8
 }
