@@ -1,12 +1,22 @@
 #![no_std]
 #![no_main]
 
-
-use arduino_hal::{port::{mode::{Output, Analog}, Pin}, hal::{port::{PB3, PB2, PB5, PC3}, Adc}, clock::MHz16};
-use max7219::{MAX7219, connectors::PinConnector};
+use arduino_hal::{
+    clock::MHz16,
+    hal::{
+        port::{PB2, PB3, PB5, PC3},
+        Adc,
+    },
+    port::{
+        mode::{Analog, Output},
+        Pin,
+    },
+};
+use max7219::{connectors::PinConnector, MAX7219};
 use panic_halt as _;
 
 type Matrix = MAX7219<PinConnector<Pin<Output, PB3>, Pin<Output, PB2>, Pin<Output, PB5>>>;
+type Position = (u8, u8);
 
 #[derive(PartialEq)]
 enum GameState {
@@ -17,7 +27,7 @@ enum GameState {
 
 struct GameManager {
     snake: Snake,
-    food: (u8, u8),
+    food: Position,
     state: GameState,
 }
 
@@ -25,7 +35,11 @@ impl GameManager {
     fn new(analog_noise: &Pin<Analog, PC3>, adc: &mut Adc<MHz16>) -> Self {
         let snake = Snake::new();
         let food = Self::get_next_safe_food_pos(&snake, analog_noise, adc);
-        GameManager { snake: Snake::new(), food, state: GameState::Start }
+        GameManager {
+            snake: Snake::new(),
+            food,
+            state: GameState::Start,
+        }
     }
 
     fn process_movement(&mut self, direction: Option<Direction>) {
@@ -34,11 +48,11 @@ impl GameManager {
         };
 
         match (&self.snake.direction, &direction) {
-            | (Direction::Left, Direction::Right)
+            (Direction::Left, Direction::Right)
             | (Direction::Right, Direction::Left)
             | (Direction::Up, Direction::Down)
             | (Direction::Down, Direction::Up) => (),
-            _ => self.snake.direction = direction
+            _ => self.snake.direction = direction,
         }
     }
 
@@ -50,7 +64,6 @@ impl GameManager {
         }
 
         let snake_tail = self.snake.tick();
-
         let snake_head = self.snake.body[0];
 
         if snake_head == self.food {
@@ -58,6 +71,20 @@ impl GameManager {
             self.snake.length += 1;
 
             self.food = Self::get_next_safe_food_pos(&self.snake, analog_noise, adc);
+        }
+    }
+
+    fn get_next_safe_food_pos(
+        snake: &Snake,
+        analog_noise: &Pin<Analog, PC3>,
+        adc: &mut Adc<MHz16>,
+    ) -> Position {
+        loop {
+            let food = generate_rand_food_pos(analog_noise, adc);
+
+            if !snake.is_on_pos(food) {
+                return food;
+            }
         }
     }
 
@@ -72,24 +99,13 @@ impl GameManager {
             image[column] |= 0b1 << row;
         }
 
-        image[(self.food.0 - 1) as usize] |= 0b1 << self.food.1 - 1;
-
+        image[(self.food.0 - 1) as usize] |= 0b1 << (self.food.1 - 1);
         image
-    }
-
-    fn get_next_safe_food_pos(snake: &Snake, analog_noise: &Pin<Analog, PC3>, adc: &mut Adc<MHz16>) -> (u8, u8) {
-        loop {
-            let food = generate_rand_food_pos(analog_noise, adc);
-
-            if !snake.is_on_pos(food) {
-                return food;
-            }
-        }
     }
 }
 
 struct Snake {
-    body: [(u8, u8); 64],
+    body: [Position; 64],
     direction: Direction,
     length: u8,
 }
@@ -109,15 +125,13 @@ impl Snake {
     }
 
     fn tick(&mut self) -> (u8, u8) {
-        let mut previous = self.body[0].clone();
+        let mut previous = self.body[0];
 
         let next_pos = self.get_next_pos();
         self.body[0] = next_pos;
 
         for i in 1..self.length {
-            let new_prev = self.body[i as usize];
-            self.body[i as usize] = previous;
-            previous = new_prev;
+            core::mem::swap(&mut self.body[i as usize], &mut previous);
         }
 
         previous
@@ -130,7 +144,10 @@ impl Snake {
     fn get_next_pos(&self) -> (u8, u8) {
         let movement = self.direction.to_index_movement();
         let head = self.body[0];
-        (head.0.wrapping_add_signed(movement.0), head.1.wrapping_add_signed(movement.1))
+        (
+            head.0.wrapping_add_signed(movement.0),
+            head.1.wrapping_add_signed(movement.1),
+        )
     }
 }
 
@@ -148,7 +165,7 @@ impl Direction {
             Self::Up => (0, -1),
             Self::Down => (0, 1),
             Self::Left => (-1, 0),
-            Self::Right => (1, 0)
+            Self::Right => (1, 0),
         }
     }
 }
@@ -165,9 +182,14 @@ fn main() -> ! {
 
     let analog_noise = pins.a3.into_analog_input(&mut adc);
 
-    let mut max = MAX7219::from_pins(1, pins.d11.into_output(), pins.d10.into_output(), pins.d13.into_output()).unwrap();
+    let mut max = MAX7219::from_pins(
+        1,
+        pins.d11.into_output(),
+        pins.d10.into_output(),
+        pins.d13.into_output(),
+    )
+    .unwrap();
     max.power_on().unwrap();
-
 
     let mut gamestate = GameManager::new(&analog_noise, &mut adc);
     write_image(&mut max, gamestate.to_image());
@@ -190,7 +212,7 @@ fn main() -> ! {
             (x, _) if x < 100 => Some(Direction::Left),
             (_, y) if y > 900 => Some(Direction::Down),
             (_, y) if y < 100 => Some(Direction::Up),
-            _ => None, 
+            _ => None,
         };
 
         gamestate.process_movement(new_direction);
@@ -203,14 +225,18 @@ fn main() -> ! {
 
 fn write_image(max: &mut Matrix, image: [u8; 8]) {
     for column in 0..8 {
-        max.write_raw_byte(0, column + 1, image[column as usize]).unwrap();
+        max.write_raw_byte(0, column + 1, image[column as usize])
+            .unwrap();
     }
 }
 
-fn generate_rand_food_pos(analog_noise: &Pin<Analog, PC3>, adc: &mut Adc<MHz16>) -> (u8, u8) {
-    ((analog_noise.analog_read(adc) % 8 + 1) as u8,(analog_noise.analog_read(adc) % 8 + 1) as u8)
+fn generate_rand_food_pos(analog_noise: &Pin<Analog, PC3>, adc: &mut Adc<MHz16>) -> Position {
+    (
+        (analog_noise.analog_read(adc) % 8 + 1) as u8,
+        (analog_noise.analog_read(adc) % 8 + 1) as u8,
+    )
 }
 
-fn is_position_out_of_bounds(pos: (u8, u8)) -> bool {
-    pos.0 <= 0 || pos.0 > 8 || pos.1 <= 0 || pos.1 > 8
+fn is_position_out_of_bounds(pos: Position) -> bool {
+    pos.0 == 0 || pos.0 > 8 || pos.1 == 0 || pos.1 > 8
 }
