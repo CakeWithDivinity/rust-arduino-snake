@@ -32,13 +32,21 @@ impl GameState {
         }
     }
 
-    fn tick(&mut self) {
+    fn tick(&mut self, analog_noise: &Pin<Analog, PC3>, adc: &mut Adc<MHz16>) {
         let snake_tail = self.snake.tick();
 
         let snake_head = self.snake.body[0];
         if snake_head == self.food {
             self.snake.body[self.snake.length as usize] = snake_tail;
             self.snake.length += 1;
+
+            loop {
+                self.food = generate_rand_food_pos(analog_noise, adc);
+
+                if !self.snake.is_on_pos(self.food) {
+                    break;
+                }
+            }
         }
     }
 
@@ -93,6 +101,10 @@ impl Snake {
 
         previous
     }
+
+    fn is_on_pos(&self, pos: (u8, u8)) -> bool {
+        self.body.iter().any(|snake_part| *snake_part == pos)
+    }
 }
 
 #[derive(Clone)]
@@ -134,15 +146,15 @@ fn main() -> ! {
     loop {
 
         let new_direction = match (joy_x.analog_read(&mut adc), joy_y.analog_read(&mut adc)) {
-            (x, _) if x > 1000 => Some(Direction::Right),
+            (x, _) if x > 900 => Some(Direction::Right),
             (x, _) if x < 100 => Some(Direction::Left),
-            (_, y) if y > 1000 => Some(Direction::Down),
+            (_, y) if y > 900 => Some(Direction::Down),
             (_, y) if y < 100 => Some(Direction::Up),
             _ => None, 
         };
 
         gamestate.process_movement(new_direction);
-        gamestate.tick();
+        gamestate.tick(&analog_noise, &mut adc);
 
         write_image(&mut max, gamestate.to_image());
         arduino_hal::delay_ms(500);
