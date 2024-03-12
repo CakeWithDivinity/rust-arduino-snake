@@ -2,7 +2,7 @@
 #![no_main]
 
 
-use arduino_hal::{port::{mode::Output, Pin}, hal::port::{PB3, PB2, PB5}};
+use arduino_hal::{port::{mode::{Output, Analog}, Pin}, hal::{port::{PB3, PB2, PB5, PC3}, Adc}, clock::MHz16};
 use max7219::{MAX7219, connectors::PinConnector};
 use panic_halt as _;
 
@@ -10,11 +10,12 @@ type Matrix = MAX7219<PinConnector<Pin<Output, PB3>, Pin<Output, PB2>, Pin<Outpu
 
 struct GameState {
     snake: Snake,
+    food: (u8, u8),
 }
 
 impl GameState {
-    fn new() -> Self {
-        GameState { snake: Snake::new() }
+    fn new(initial_food_pos: (u8, u8)) -> Self {
+        GameState { snake: Snake::new(), food: initial_food_pos }
     }
 
     fn process_movement(&mut self, direction: Option<Direction>) {
@@ -32,7 +33,13 @@ impl GameState {
     }
 
     fn tick(&mut self) {
-        self.snake.tick();
+        let snake_tail = self.snake.tick();
+
+        let snake_head = self.snake.body[0];
+        if snake_head == self.food {
+            self.snake.body[self.snake.length as usize] = snake_tail;
+            self.snake.length += 1;
+        }
     }
 
     fn to_image(&self) -> [u8; 8] {
@@ -41,10 +48,12 @@ impl GameState {
         for i in 0..self.snake.length {
             let body_part = self.snake.body[i as usize];
             let column: usize = (body_part.0 - 1).into();
-            let row: usize = (body_part.1 - 1).into();
+            let row = body_part.1 - 1;
 
-            image[column] = image[column] | (0b1 << row);
+            image[column] |= 0b1 << row;
         }
+
+        image[(self.food.0 - 1) as usize] |= 0b1 << self.food.1 - 1;
 
         image
     }
@@ -70,21 +79,19 @@ impl Snake {
         }
     }
 
-    fn tick(&mut self) {
+    fn tick(&mut self) -> (u8, u8) {
         let mut previous = self.body[0].clone();
 
         let movement = self.direction.to_index_movement();
         self.body[0] = (previous.0.wrapping_add_signed(movement.0), previous.1.wrapping_add_signed(movement.1));
-
-        if self.length < 1 {
-            return;
-        }
 
         for i in 1..self.length {
             let new_prev = self.body[i as usize];
             self.body[i as usize] = previous;
             previous = new_prev;
         }
+
+        previous
     }
 }
 
@@ -116,10 +123,13 @@ fn main() -> ! {
     let joy_x = pins.a1.into_analog_input(&mut adc);
     let joy_y = pins.a2.into_analog_input(&mut adc);
 
+    let analog_noise = pins.a3.into_analog_input(&mut adc);
+
     let mut max = MAX7219::from_pins(1, pins.d11.into_output(), pins.d10.into_output(), pins.d13.into_output()).unwrap();
     max.power_on().unwrap();
 
-    let mut gamestate = GameState::new();
+
+    let mut gamestate = GameState::new(generate_rand_food_pos(&analog_noise, &mut adc));
 
     loop {
 
@@ -143,4 +153,8 @@ fn write_image(max: &mut Matrix, image: [u8; 8]) {
     for column in 0..8 {
         max.write_raw_byte(0, column + 1, image[column as usize]).unwrap();
     }
+}
+
+fn generate_rand_food_pos(analog_noise: &Pin<Analog, PC3>, adc: &mut Adc<MHz16>) -> (u8, u8) {
+    ((analog_noise.analog_read(adc) % 8 + 1) as u8,(analog_noise.analog_read(adc) % 8 + 1) as u8)
 }
