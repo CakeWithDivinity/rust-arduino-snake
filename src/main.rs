@@ -22,8 +22,10 @@ struct GameManager {
 }
 
 impl GameManager {
-    fn new(initial_food_pos: (u8, u8)) -> Self {
-        GameManager { snake: Snake::new(), food: initial_food_pos, state: GameState::Start }
+    fn new(analog_noise: &Pin<Analog, PC3>, adc: &mut Adc<MHz16>) -> Self {
+        let snake = Snake::new();
+        let food = Self::get_next_safe_food_pos(&snake, analog_noise, adc);
+        GameManager { snake: Snake::new(), food, state: GameState::Start }
     }
 
     fn process_movement(&mut self, direction: Option<Direction>) {
@@ -55,13 +57,7 @@ impl GameManager {
             self.snake.body[self.snake.length as usize] = snake_tail;
             self.snake.length += 1;
 
-            loop {
-                self.food = generate_rand_food_pos(analog_noise, adc);
-
-                if !self.snake.is_on_pos(self.food) {
-                    break;
-                }
-            }
+            self.food = Self::get_next_safe_food_pos(&self.snake, analog_noise, adc);
         }
     }
 
@@ -79,6 +75,16 @@ impl GameManager {
         image[(self.food.0 - 1) as usize] |= 0b1 << self.food.1 - 1;
 
         image
+    }
+
+    fn get_next_safe_food_pos(snake: &Snake, analog_noise: &Pin<Analog, PC3>, adc: &mut Adc<MHz16>) -> (u8, u8) {
+        loop {
+            let food = generate_rand_food_pos(analog_noise, adc);
+
+            if !snake.is_on_pos(food) {
+                return food;
+            }
+        }
     }
 }
 
@@ -163,14 +169,14 @@ fn main() -> ! {
     max.power_on().unwrap();
 
 
-    let mut gamestate = GameManager::new(generate_rand_food_pos(&analog_noise, &mut adc));
+    let mut gamestate = GameManager::new(&analog_noise, &mut adc);
     write_image(&mut max, gamestate.to_image());
 
     loop {
         if gamestate.state != GameState::Running {
             if joy_button.is_low() {
                 if gamestate.state == GameState::Dead {
-                    gamestate = GameManager::new(generate_rand_food_pos(&analog_noise, &mut adc));
+                    gamestate = GameManager::new(&analog_noise, &mut adc);
                 }
 
                 gamestate.state = GameState::Running;
